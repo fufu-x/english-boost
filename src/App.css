@@ -182,3 +182,79 @@ h2 { font-size: 20px; font-weight: 700; margin-bottom: 16px; }
 
 @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
 .pulse { animation: pulse 1.5s infinite; }
+
+/* Tap-to-define interactive text */
+.tap-hint {
+  font-size: 12px; color: #0d7377; background: #f0fdfa;
+  padding: 6px 12px; border-radius: 8px; margin-bottom: 12px;
+  border: 1px solid #c4f1e4;
+}
+.tap-word {
+  cursor: pointer; border-radius: 3px; transition: background 0.15s;
+  padding: 1px 0;
+}
+.tap-word:active { background: #d1fae5; }
+.tap-word-vocab {
+  background: #fef3c7; border-bottom: 2px solid #e8913a;
+}
+.tap-word-vocab:active { background: #fde68a; }
+
+/* Popup overlay */
+.popup-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.3); z-index: 200;
+  display: flex; align-items: flex-end; justify-content: center;
+}
+.popup-card {
+  background: #fff; border-radius: 16px 16px 0 0;
+  padding: 24px 20px max(24px, env(safe-area-inset-bottom));
+  width: 100%; max-width: 480px; position: relative;
+  max-height: 60vh; overflow-y: auto;
+  animation: slideUp 0.2s ease-out;
+}
+.popup-card-wide { max-height: 70vh; }
+@keyframes slideUp {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+.popup-close {
+  position: absolute; top: 12px; right: 16px;
+  background: none; border: none; font-size: 18px; color: #aaa;
+  cursor: pointer; padding: 4px;
+}
+.popup-word { font-size: 22px; font-weight: 700; color: #1a1a1a; margin-bottom: 2px; }
+.popup-ph { font-size: 13px; color: #aaa; margin-bottom: 8px; }
+.popup-mean { font-size: 17px; font-weight: 600; color: #0d7377; margin-bottom: 8px; }
+.popup-detail { font-size: 14px; color: #666; line-height: 1.6; margin-bottom: 16px; }
+.popup-actions { display: flex; gap: 10px; margin-top: 8px; }
+.popup-btn {
+  padding: 10px 16px; border-radius: 10px; font-size: 14px;
+  font-weight: 600; cursor: pointer; font-family: inherit; border: none;
+}
+.popup-btn-save { background: #0d7377; color: #fff; flex: 1; }
+.popup-btn-save:active { background: #0a5f62; }
+.popup-btn-explain { background: #f3f4f6; color: #555; flex: 1; }
+.popup-btn-explain:active { background: #e5e7eb; }
+.popup-saved { font-size: 13px; color: #10b981; padding: 10px 0; }
+.popup-section-title { font-size: 14px; font-weight: 600; color: #888; margin-bottom: 8px; }
+.popup-explanation { font-size: 15px; color: #333; line-height: 1.7; }
+.popup-keyphrase {
+  font-size: 14px; color: #555; padding: 6px 0;
+  border-bottom: 1px solid #f3f4f6; line-height: 1.5;
+}
+
+/* Vocab section in reader */
+.vocab-section { margin-top: 24px; }
+.vocab-summary {
+  font-size: 14px; font-weight: 600; color: #888;
+  cursor: pointer; padding: 8px 0; list-style: none;
+}
+.vocab-summary::-webkit-details-marker { display: none; }
+.vocab-summary::before { content: '▸ '; }
+details[open] > .vocab-summary::before { content: '▾ '; }
+.vocab-add-btn {
+  font-size: 12px; color: #0d7377; background: #f0fdfa;
+  border: 1px solid #c4f1e4; border-radius: 6px;
+  padding: 3px 10px; cursor: pointer; font-family: inherit; font-weight: 600;
+}
+.vocab-add-btn:active { background: #d1fae5; }
