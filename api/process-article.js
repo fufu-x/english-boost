@@ -63,7 +63,8 @@ export default async function handler(req, res) {
     }
 
     // Step 3: Send to Claude for analysis
-    const claudeResp = await fetch('https://api.anthropic.com/v1/messages', {
+    const baseUrl = process.env.API_BASE_URL || 'https://api.anthropic.com';
+    const claudeResp = await fetch(`${baseUrl}/v1/messages`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
