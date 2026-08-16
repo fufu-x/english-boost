@@ -1,17 +1,170 @@
-import { useState } from 'react'
-import { addWords, hasWord, markArticleRead } from '../utils/storage'
+import { useState, useCallback } from 'react'
+import { addWord, hasWord, markArticleRead } from '../utils/storage'
+
+// Split text into tokens: words and whitespace/punctuation
+function tokenize(text) {
+  // Split keeping spaces and punctuation attached to context
+  const tokens = [];
+  const regex = /([a-zA-Z'-]+|[^a-zA-Z'\s-]+|\s+)/g;
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    tokens.push(match[0]);
+  }
+  return tokens;
+}
+
+// Extract clean word (strip surrounding punctuation)
+function cleanWord(token) {
+  return token.replace(/^[^a-zA-Z]+|[^a-zA-Z]+$/g, '');
+}
+
+// Find the sentence containing a word at a given position in text
+function findSentence(text, wordStart) {
+  // Look backwards for sentence start
+  let start = wordStart;
+  while (start > 0 && !/[.!?]\s/.test(text.slice(start - 2, start))) {
+    start--;
+  }
+  // Look forwards for sentence end
+  let end = wordStart;
+  while (end < text.length && !/[.!?]/.test(text[end])) {
+    end++;
+  }
+  return text.slice(start, end + 1).trim();
+}
+
+// Popup component for word lookup
+function WordPopup({ info, loading, error, onSave, onExplainSentence, onClose, alreadySaved, sentence }) {
+  return (
+    <div className="popup-overlay" onClick={onClose}>
+      <div className="popup-card" onClick={e => e.stopPropagation()}>
+        <button className="popup-close" onClick={onClose}>✕</button>
+
+        {loading && (
+          <div style={{ textAlign: 'center', padding: '20px 0', color: '#888' }}>
+            <div className="pulse" style={{ fontSize: 20, marginBottom: 8 }}>...</div>
+            查询中
+          </div>
+        )}
+
+        {error && (
+          <div style={{ color: '#dc2626', fontSize: 14, padding: '16px 0' }}>
+            {error}
+          </div>
+        )}
+
+        {info && !loading && (
+          <>
+            <div className="popup-word">{info.word}</div>
+            {info.ph && <div className="popup-ph">{info.ph}</div>}
+            <div className="popup-mean">{info.mean}</div>
+            {info.detail && <div className="popup-detail">{info.detail}</div>}
+
+            <div className="popup-actions">
+              {alreadySaved ? (
+                <span className="popup-saved">已在词库</span>
+              ) : (
+                <button className="popup-btn popup-btn-save" onClick={onSave}>
+                  + 收藏到词库
+                </button>
+              )}
+              <button className="popup-btn popup-btn-explain" onClick={onExplainSentence}>
+                解释整句
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Sentence explanation popup
+function SentencePopup({ info, loading, error, onClose }) {
+  return (
+    <div className="popup-overlay" onClick={onClose}>
+      <div className="popup-card popup-card-wide" onClick={e => e.stopPropagation()}>
+        <button className="popup-close" onClick={onClose}>✕</button>
+
+        {loading && (
+          <div style={{ textAlign: 'center', padding: '20px 0', color: '#888' }}>
+            <div className="pulse" style={{ fontSize: 20, marginBottom: 8 }}>...</div>
+            正在分析句子...
+          </div>
+        )}
+
+        {error && <div style={{ color: '#dc2626', fontSize: 14 }}>{error}</div>}
+
+        {info && !loading && (
+          <>
+            <div className="popup-section-title">句子解析</div>
+            <div className="popup-explanation">{info.explanation}</div>
+            {info.keyPhrases && info.keyPhrases.length > 0 && (
+              <>
+                <div className="popup-section-title" style={{ marginTop: 12 }}>关键短语</div>
+                {info.keyPhrases.map((kp, i) => (
+                  <div key={i} className="popup-keyphrase">
+                    <b>{kp.phrase}</b> — {kp.mean}
+                  </div>
+                ))}
+              </>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Interactive article text - every word is tappable
+function InteractiveText({ text, vocabSet, onWordTap }) {
+  const tokens = tokenize(text);
+  let charPos = 0;
+
+  return (
+    <div className="article-content">
+      {tokens.map((token, i) => {
+        const pos = charPos;
+        charPos += token.length;
+        const word = cleanWord(token);
+
+        // If it's a real word (has letters)
+        if (/[a-zA-Z]/.test(token) && word.length > 1) {
+          const isVocab = vocabSet.has(word.toLowerCase());
+          return (
+            <span
+              key={i}
+              className={`tap-word ${isVocab ? 'tap-word-vocab' : ''}`}
+              onClick={() => onWordTap(word, pos, text)}
+            >
+              {token}
+            </span>
+          );
+        }
+        // Whitespace or punctuation - render as is
+        return <span key={i}>{token}</span>;
+      })}
+    </div>
+  );
+}
+
 
 export default function ArticleReader({ article, data, updateData, onClose }) {
   const [processed, setProcessed] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [selectedWord, setSelectedWord] = useState(null);
-  const [markedWords, setMarkedWords] = useState(new Set());
-  const [phase, setPhase] = useState('loading'); // loading | reading | quiz | done
+  // Word popup state
+  const [wordPopup, setWordPopup] = useState(null); // { info, loading, error, word, sentence }
+  // Sentence popup state
+  const [sentencePopup, setSentencePopup] = useState(null); // { info, loading, error, sentence }
+  // Quiz state
+  const [phase, setPhase] = useState('loading');
   const [answers, setAnswers] = useState({});
   const [checked, setChecked] = useState(false);
+  // Track words saved during this session
+  const [sessionSaved, setSessionSaved] = useState(new Set());
 
-  // Fetch and process article on mount
+  // Process article on mount
   useState(() => {
     processArticle();
   }, []);
@@ -26,9 +179,7 @@ export default function ArticleReader({ article, data, updateData, onClose }) {
         body: JSON.stringify({ url: article.link }),
       });
       const result = await resp.json();
-      if (result.error) {
-        throw new Error(result.error);
-      }
+      if (result.error) throw new Error(result.error);
       setProcessed(result);
       setPhase('reading');
     } catch (e) {
@@ -38,46 +189,90 @@ export default function ArticleReader({ article, data, updateData, onClose }) {
     setLoading(false);
   }
 
-  // Toggle word as marked for learning
-  const toggleMark = (vocabItem) => {
-    const newMarked = new Set(markedWords);
-    if (newMarked.has(vocabItem.word)) {
-      newMarked.delete(vocabItem.word);
-    } else {
-      newMarked.add(vocabItem.word);
+  // Lookup a single word
+  const lookupWord = useCallback(async (word, charPos, fullText) => {
+    const sentence = findSentence(fullText, charPos);
+    setWordPopup({ info: null, loading: true, error: null, word, sentence });
+
+    try {
+      const resp = await fetch('/api/lookup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ word, sentence, mode: 'word' }),
+      });
+      const result = await resp.json();
+      if (result.error) throw new Error(result.error);
+      setWordPopup(prev => ({ ...prev, info: result, loading: false }));
+    } catch (e) {
+      setWordPopup(prev => ({ ...prev, loading: false, error: '查询失败，请重试' }));
     }
-    setMarkedWords(newMarked);
+  }, []);
+
+  // Explain a full sentence
+  const explainSentence = useCallback(async (sentence) => {
+    setWordPopup(null);
+    setSentencePopup({ info: null, loading: true, error: null, sentence });
+
+    try {
+      const resp = await fetch('/api/lookup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sentence, mode: 'sentence' }),
+      });
+      const result = await resp.json();
+      if (result.error) throw new Error(result.error);
+      setSentencePopup(prev => ({ ...prev, info: result, loading: false }));
+    } catch (e) {
+      setSentencePopup(prev => ({ ...prev, loading: false, error: '解析失败，请重试' }));
+    }
+  }, []);
+
+  // Save word to bank
+  const saveWord = useCallback(() => {
+    if (!wordPopup || !wordPopup.info) return;
+    const info = wordPopup.info;
+    const newData = addWord(data, {
+      word: info.word,
+      ph: info.ph || '',
+      mean: info.mean,
+      context: wordPopup.sentence || '',
+      contextCn: '',
+    }, processed?.title || article.title);
+    updateData(newData);
+    setSessionSaved(prev => new Set(prev).add(info.word.toLowerCase()));
+  }, [wordPopup, data, updateData, processed, article]);
+
+  // Save a vocab card word
+  const saveVocabWord = useCallback((v) => {
+    const newData = addWord(data, v, processed?.title || article.title);
+    updateData(newData);
+    setSessionSaved(prev => new Set(prev).add(v.word.toLowerCase()));
+  }, [data, updateData, processed, article]);
+
+  const isWordSaved = (w) => {
+    return hasWord(data, w) || sessionSaved.has(w.toLowerCase());
   };
 
-  // Move from reading to quiz
+  // Go to quiz
   const goToQuiz = () => {
-    // Save marked words
-    if (markedWords.size > 0 && processed) {
-      const wordsToAdd = processed.vocab.filter(v => markedWords.has(v.word) && !hasWord(data, v.word));
-      if (wordsToAdd.length > 0) {
-        const newData = addWords(data, wordsToAdd, processed.title || article.title);
-        updateData(newData);
-      }
-    }
     setPhase('quiz');
   };
 
-  // Check quiz answers
+  // Submit quiz
   const submitQuiz = () => {
     setChecked(true);
-    // Record article as read
-    let correctCount = 0;
-    if (processed && processed.questions) {
+    let correct = 0;
+    if (processed?.questions) {
       for (let i = 0; i < processed.questions.length; i++) {
-        if (answers[i] === processed.questions[i].answer) correctCount++;
+        if (answers[i] === processed.questions[i].answer) correct++;
       }
     }
     const qTotal = processed?.questions?.length || 0;
-    const newData = markArticleRead(data, article.link, processed?.title || article.title, article.sourceName, [correctCount, qTotal]);
+    const newData = markArticleRead(data, article.link, processed?.title || article.title, article.sourceName, [correct, qTotal]);
     updateData(newData);
   };
 
-  // ── Loading / Error ──
+  // ── Loading ──
   if (loading || (phase === 'loading' && !error)) {
     return (
       <div className="page loading">
@@ -89,16 +284,14 @@ export default function ArticleReader({ article, data, updateData, onClose }) {
     );
   }
 
-  if (error) {
+  if (error && phase === 'loading') {
     return (
       <div className="page" style={{ paddingTop: 40, textAlign: 'center' }}>
         <div style={{ fontSize: 32, marginBottom: 12 }}>😞</div>
         <p style={{ color: '#dc2626', marginBottom: 16 }}>{error}</p>
         <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
-          <button className="btn btn-primary" style={{ width: 'auto', padding: '10px 24px' }}
-            onClick={processArticle}>重试</button>
-          <button className="btn btn-white" style={{ width: 'auto', padding: '10px 24px' }}
-            onClick={onClose}>返回</button>
+          <button className="btn btn-primary" style={{ width: 'auto', padding: '10px 24px' }} onClick={processArticle}>重试</button>
+          <button className="btn btn-white" style={{ width: 'auto', padding: '10px 24px' }} onClick={onClose}>返回</button>
         </div>
       </div>
     );
@@ -106,76 +299,94 @@ export default function ArticleReader({ article, data, updateData, onClose }) {
 
   // ── Reading Phase ──
   if (phase === 'reading' && processed) {
-    const vocabWords = new Set(processed.vocab.map(v => v.word.toLowerCase()));
+    const vocabSet = new Set((processed.vocab || []).map(v => v.word.toLowerCase()));
 
     return (
       <div className="page" style={{ paddingBottom: 120 }}>
         <button className="btn-back" onClick={onClose}>← 返回文章列表</button>
-
         <div className="article-source-tag">{article.sourceName}</div>
-        <h2 style={{ fontSize: 18, lineHeight: 1.4, marginBottom: 16 }}>{processed.title}</h2>
+        <h2 style={{ fontSize: 18, lineHeight: 1.4, marginBottom: 8 }}>{processed.title}</h2>
+        <p className="tap-hint">💡 点击任意单词查释义，高亮词是 AI 推荐</p>
 
-        {/* Article content */}
-        <div className="article-content">
-          {processed.content}
-        </div>
+        {/* Interactive article text */}
+        <InteractiveText
+          text={processed.content}
+          vocabSet={vocabSet}
+          onWordTap={lookupWord}
+        />
 
-        {/* Vocabulary section */}
-        <div style={{ marginTop: 24 }}>
-          <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 12 }}>
-            📌 这篇文章的重点词汇 <span style={{ fontWeight: 400, color: '#888', fontSize: 13 }}>（点击收藏到词库）</span>
-          </h3>
-
-          {processed.vocab.map((v, i) => {
-            const isMarked = markedWords.has(v.word);
-            const alreadyKnown = hasWord(data, v.word);
-
+        {/* AI recommended vocab (collapsed by default) */}
+        <details className="vocab-section">
+          <summary className="vocab-summary">
+            📌 AI 推荐词汇（{processed.vocab?.length || 0} 个）
+          </summary>
+          {processed.vocab && processed.vocab.map((v, i) => {
+            const saved = isWordSaved(v.word);
             return (
-              <div key={i}
-                className={`vocab-card ${isMarked ? 'vocab-marked' : ''} ${alreadyKnown ? 'vocab-known' : ''}`}
-                onClick={() => !alreadyKnown && toggleMark(v)}>
+              <div key={i} className={`vocab-card ${saved ? 'vocab-known' : ''}`}>
                 <div className="vocab-card-header">
                   <div>
                     <span className="vocab-card-word">{v.word}</span>
                     {v.ph && <span className="vocab-card-ph">{v.ph}</span>}
                   </div>
-                  <span className="vocab-card-check">
-                    {alreadyKnown ? '已在词库' : isMarked ? '✅' : '＋'}
-                  </span>
+                  {!saved ? (
+                    <button className="vocab-add-btn" onClick={(e) => { e.stopPropagation(); saveVocabWord(v); }}>+ 收藏</button>
+                  ) : (
+                    <span className="vocab-card-check">已收藏</span>
+                  )}
                 </div>
                 <div className="vocab-card-mean">{v.mean}</div>
-                {v.context && (
-                  <div className="vocab-card-context">"{v.context}"</div>
-                )}
-                {v.contextCn && (
-                  <div className="vocab-card-contextCn">{v.contextCn}</div>
-                )}
+                {v.context && <div className="vocab-card-context">"{v.context}"</div>}
+                {v.contextCn && <div className="vocab-card-contextCn">{v.contextCn}</div>}
               </div>
             );
           })}
-        </div>
+        </details>
 
         {/* Action bar */}
         <div className="reader-action-bar">
           <div style={{ fontSize: 13, color: '#666' }}>
-            已选 {markedWords.size} 个新词
+            已收藏 {sessionSaved.size} 个新词
           </div>
           <button className="btn btn-primary"
             style={{ width: 'auto', padding: '12px 24px', margin: 0 }}
             onClick={goToQuiz}>
-            {markedWords.size > 0 ? `收藏并做题 →` : '跳过收藏，做题 →'}
+            做题 →
           </button>
         </div>
+
+        {/* Word popup */}
+        {wordPopup && (
+          <WordPopup
+            info={wordPopup.info}
+            loading={wordPopup.loading}
+            error={wordPopup.error}
+            sentence={wordPopup.sentence}
+            alreadySaved={wordPopup.info ? isWordSaved(wordPopup.info.word) : false}
+            onSave={saveWord}
+            onExplainSentence={() => explainSentence(wordPopup.sentence)}
+            onClose={() => setWordPopup(null)}
+          />
+        )}
+
+        {/* Sentence popup */}
+        {sentencePopup && (
+          <SentencePopup
+            info={sentencePopup.info}
+            loading={sentencePopup.loading}
+            error={sentencePopup.error}
+            onClose={() => setSentencePopup(null)}
+          />
+        )}
       </div>
     );
   }
 
   // ── Quiz Phase ──
-  if ((phase === 'quiz' || phase === 'done') && processed && processed.questions) {
+  if (phase === 'quiz' && processed?.questions) {
     const qLen = processed.questions.length;
     const ansLen = Object.keys(answers).length;
     const canCheck = ansLen >= qLen;
-
     let correctCount = 0;
     if (checked) {
       for (let i = 0; i < qLen; i++) {
@@ -190,9 +401,7 @@ export default function ArticleReader({ article, data, updateData, onClose }) {
 
         {processed.questions.map((q, qi) => (
           <div key={qi} className="card">
-            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 10 }}>
-              Q{qi + 1}. {q.q}
-            </div>
+            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 10 }}>Q{qi + 1}. {q.q}</div>
             {q.options.map((opt, oi) => {
               let cls = 'q-option';
               if (checked) {
@@ -221,11 +430,9 @@ export default function ArticleReader({ article, data, updateData, onClose }) {
             </button>
           ) : (
             <div style={{ width: '100%', textAlign: 'center' }}>
-              <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>
-                {correctCount}/{qLen} 正确
-              </div>
+              <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>{correctCount}/{qLen} 正确</div>
               <p style={{ color: '#888', fontSize: 13, marginBottom: 16 }}>
-                {markedWords.size > 0 ? `${markedWords.size} 个新词已加入复习队列` : ''}
+                {sessionSaved.size > 0 ? `本次收藏了 ${sessionSaved.size} 个新词` : ''}
               </p>
               <button className="btn btn-primary"
                 style={{ width: 'auto', display: 'inline-block', padding: '12px 32px' }}
